@@ -46,7 +46,7 @@ MFRC522 *Mfrc522[MAX_RC522];
 struct RC522 {
   char uids[21];           // Number of bytes in the UID. 4, 7 or 10
   bool present = false;
-  uint8_t scantimer = 16;
+  // uint8_t scantimer = 16;
 } Rc522[MAX_RC522];
 
 void RC522ScanForTag(uint32_t index) {
@@ -54,7 +54,8 @@ void RC522ScanForTag(uint32_t index) {
   if (!Mfrc522[index]->PICC_IsNewCardPresent() || !Mfrc522[index]->PICC_ReadCardSerial()) { return; }
 
   ToHex_P((unsigned char*)Mfrc522[index]->uid.uidByte, Mfrc522[index]->uid.size, Rc522[index].uids, sizeof(Rc522[index].uids));
-  ResponseTime_P(PSTR(",\"RC522\":{\"INDEX\":\"%d\",\"UID\":\"%s\""), index, Rc522[index].uids);
+  // ResponseTime_P(PSTR(",\"RC522\":{\"INDEX\":\"%d\",\"UID\":\"%s\""), index, Rc522[index].uids);
+  ResponseTime_P(PSTR(",\"RC522\":{\"UID%d\":\"%s\""), index, Rc522[index].uids);
 
   MFRC522::PICC_Type picc_type = Mfrc522[index]->PICC_GetType(Mfrc522[index]->uid.sak);
 #ifdef USE_RC522_DATA_FUNCTION
@@ -94,7 +95,7 @@ void RC522ScanForTag(uint32_t index) {
   Mfrc522[index]->PICC_HaltA();       // Halt PICC
   Mfrc522[index]->PCD_StopCrypto1();  // Stop encryption on PCD
 
-  Rc522[index].scantimer = 7;         // Ignore tags found for two seconds
+  // Rc522[index].scantimer = 7;         // Ignore tags found for two seconds
 }
 
 void RC522Init(void) {
@@ -106,24 +107,31 @@ void RC522Init(void) {
     SPI.begin(Pin(GPIO_SPI_CLK), Pin(GPIO_SPI_MISO), Pin(GPIO_SPI_MOSI), -1);
 #endif // ESP32
     for (uint32_t index = 0; index < MAX_RC522; index++) {
+      if (PinUsed(GPIO_RC522_CS, index)) {
+        pinMode(Pin(GPIO_RC522_CS, index), OUTPUT);
+        digitalWrite(Pin(GPIO_RC522_CS, index), HIGH);
+      }
+    }
+
+    for (uint32_t index = 0; index < MAX_RC522; index++) {
       if (PinUsed(GPIO_RC522_CS, index) && PinUsed(GPIO_RC522_RST)) {
         Mfrc522[index] = new MFRC522(Pin(GPIO_RC522_CS, index), Pin(GPIO_RC522_RST));
         Mfrc522[index]->PCD_Init();
-  //    if (Mfrc522->PCD_PerformSelfTest()) {  // Saves 0k5 code
-        uint8_t v = Mfrc522[index]->PCD_ReadRegister(Mfrc522[index]->VersionReg);
-        char ver[8] = { 0 };
-        switch (v) {
-          case 0x92: strcpy_P(ver, PSTR("v2.0")); break;
-          case 0x91: strcpy_P(ver, PSTR("v1.0")); break;
-          case 0x88: strcpy_P(ver, PSTR("clone")); break;
-          case 0x00: case 0xFF: strcpy_P(ver, PSTR("fail")); break;
-        }
-        uint8_t empty_uid[4] = { 0 };
-        ToHex_P((unsigned char*)empty_uid, sizeof(empty_uid), Rc522[index].uids, sizeof(Rc522[index].uids));
-        AddLog(LOG_LEVEL_INFO, PSTR("MFR: RC522 Rfid Reader %d detected %s"), index, ver);
-        Rc522[index].present = true;
-  //    }
-  //    Mfrc522->PCD_Init();       // Re-init as SelfTest blows init
+        // if (Mfrc522[index]->PCD_PerformSelfTest()) {  // Saves 0k5 code
+          uint8_t v = Mfrc522[index]->PCD_ReadRegister(Mfrc522[index]->VersionReg);
+          char ver[8] = { 0 };
+          switch (v) {
+            case 0x92: strcpy_P(ver, PSTR("v2.0")); break;
+            case 0x91: strcpy_P(ver, PSTR("v1.0")); break;
+            case 0x88: strcpy_P(ver, PSTR("clone")); break;
+            case 0x00: case 0xFF: strcpy_P(ver, PSTR("fail")); break;
+          }
+          uint8_t empty_uid[4] = { 0 };
+          ToHex_P((unsigned char*)empty_uid, sizeof(empty_uid), Rc522[index].uids, sizeof(Rc522[index].uids));
+          AddLog(LOG_LEVEL_INFO, PSTR("MFR: RC522 Rfid Reader %d detected %s"), index, ver);
+          Rc522[index].present = true;
+        // }
+        // Mfrc522[index]->PCD_Init();       // Re-init as SelfTest blows init
       }
     }
   }
@@ -166,6 +174,20 @@ bool RC522Command(void) {
       gain = Mfrc522[0]->PCD_GetAntennaGain() >> 4;  // 0..7
       Response_P(PSTR("{\"Sensor80\":{\"Gain\":%d}}"), gain);
       break;
+    case 2:
+      for (uint32_t index = 0; index < MAX_RC522; index++) {
+        if (Rc522[index].present) {
+          if (!Mfrc522[index]->PICC_IsNewCardPresent() || !Mfrc522[index]->PICC_ReadCardSerial()) {
+            uint8_t empty_uid[4] = { 0 };
+            ToHex_P((unsigned char*)empty_uid, sizeof(empty_uid), Rc522[index].uids, sizeof(Rc522[index].uids));
+            continue;
+          }
+          ToHex_P((unsigned char*)Mfrc522[index]->uid.uidByte, Mfrc522[index]->uid.size, Rc522[index].uids, sizeof(Rc522[index].uids));
+          Mfrc522[index]->PCD_StopCrypto1();
+        }
+      }
+      Response_P(PSTR("{\"Sensor80\":{\"UID0\":\"%s\",\"UID1\":\"%s\",\"UID2\":\"%s\",\"UID3\":\"%s\"}}"), Rc522[0].uids,Rc522[1].uids,Rc522[2].uids,Rc522[3].uids);
+      break;
   }
 
   return serviced;
@@ -186,11 +208,11 @@ bool Xsns80(uint32_t function) {
       case FUNC_EVERY_250_MSECOND:
         for (uint32_t index = 0; index < MAX_RC522; index++) {
           if (Rc522[index].present) {
-            if (Rc522[index].scantimer) {
-              Rc522[index].scantimer--;
-            } else {
-              RC522ScanForTag(index);
-            }
+            // if (Rc522[index].scantimer) {
+            //   Rc522[index].scantimer--;
+            // } else {
+              // RC522ScanForTag(index);
+            // }
           }
         }
         break;
