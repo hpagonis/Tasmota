@@ -41,22 +41,22 @@
 //#define USE_RC522_TYPE_INFORMATION           // Add support for showing card type (+0k4 code)
 
 #include <MFRC522.h>
-MFRC522 *Mfrc522;
+MFRC522 *Mfrc522[MAX_RC522];
 
 struct RC522 {
   char uids[21];           // Number of bytes in the UID. 4, 7 or 10
   bool present = false;
   uint8_t scantimer = 16;
-} Rc522;
+} Rc522[MAX_RC522];
 
-void RC522ScanForTag(void) {
+void RC522ScanForTag(uint32_t index) {
   // Reset the loop if no new card present on the sensor/reader. This saves the entire process when idle. And if present, select one.
-  if (!Mfrc522->PICC_IsNewCardPresent() || !Mfrc522->PICC_ReadCardSerial()) { return; }
+  if (!Mfrc522[index]->PICC_IsNewCardPresent() || !Mfrc522[index]->PICC_ReadCardSerial()) { return; }
 
-  ToHex_P((unsigned char*)Mfrc522->uid.uidByte, Mfrc522->uid.size, Rc522.uids, sizeof(Rc522.uids));
-  ResponseTime_P(PSTR(",\"RC522\":{\"UID\":\"%s\""), Rc522.uids);
+  ToHex_P((unsigned char*)Mfrc522[index]->uid.uidByte, Mfrc522[index]->uid.size, Rc522[index].uids, sizeof(Rc522[index].uids));
+  ResponseTime_P(PSTR(",\"RC522\":{\"INDEX\":\"%d\",\"UID\":\"%s\""), index, Rc522[index].uids);
 
-  MFRC522::PICC_Type picc_type = Mfrc522->PICC_GetType(Mfrc522->uid.sak);
+  MFRC522::PICC_Type picc_type = Mfrc522[index]->PICC_GetType(Mfrc522[index]->uid.sak);
 #ifdef USE_RC522_DATA_FUNCTION
   if (   picc_type == MFRC522::PICC_TYPE_MIFARE_MINI
       || picc_type == MFRC522::PICC_TYPE_MIFARE_1K
@@ -91,43 +91,51 @@ void RC522ScanForTag(void) {
   ResponseJsonEndEnd();
   MqttPublishTeleSensor();
 
-  Mfrc522->PICC_HaltA();       // Halt PICC
-  Mfrc522->PCD_StopCrypto1();  // Stop encryption on PCD
+  Mfrc522[index]->PICC_HaltA();       // Halt PICC
+  Mfrc522[index]->PCD_StopCrypto1();  // Stop encryption on PCD
 
-  Rc522.scantimer = 7;         // Ignore tags found for two seconds
+  Rc522[index].scantimer = 7;         // Ignore tags found for two seconds
 }
 
 void RC522Init(void) {
-  if (PinUsed(GPIO_RC522_CS) && PinUsed(GPIO_RC522_RST) && (SPI_MOSI_MISO == TasmotaGlobal.spi_enabled)) {
-    Mfrc522 = new MFRC522(Pin(GPIO_RC522_CS), Pin(GPIO_RC522_RST));
+  if (SPI_MOSI_MISO == TasmotaGlobal.spi_enabled) {
 #ifdef EPS8266
     SPI.begin();
 #endif // EPS8266
 #ifdef ESP32
     SPI.begin(Pin(GPIO_SPI_CLK), Pin(GPIO_SPI_MISO), Pin(GPIO_SPI_MOSI), -1);
 #endif // ESP32
-    Mfrc522->PCD_Init();
-//    if (Mfrc522->PCD_PerformSelfTest()) {  // Saves 0k5 code
-      uint8_t v = Mfrc522->PCD_ReadRegister(Mfrc522->VersionReg);
-      char ver[8] = { 0 };
-      switch (v) {
-        case 0x92: strcpy_P(ver, PSTR("v2.0")); break;
-        case 0x91: strcpy_P(ver, PSTR("v1.0")); break;
-        case 0x88: strcpy_P(ver, PSTR("clone")); break;
-        case 0x00: case 0xFF: strcpy_P(ver, PSTR("fail")); break;
+    for (uint32_t index = 0; index < MAX_RC522; index++) {
+      if (PinUsed(GPIO_RC522_CS, index) && PinUsed(GPIO_RC522_RST)) {
+        Mfrc522[index] = new MFRC522(Pin(GPIO_RC522_CS, index), Pin(GPIO_RC522_RST));
+        Mfrc522[index]->PCD_Init();
+  //    if (Mfrc522->PCD_PerformSelfTest()) {  // Saves 0k5 code
+        uint8_t v = Mfrc522[index]->PCD_ReadRegister(Mfrc522[index]->VersionReg);
+        char ver[8] = { 0 };
+        switch (v) {
+          case 0x92: strcpy_P(ver, PSTR("v2.0")); break;
+          case 0x91: strcpy_P(ver, PSTR("v1.0")); break;
+          case 0x88: strcpy_P(ver, PSTR("clone")); break;
+          case 0x00: case 0xFF: strcpy_P(ver, PSTR("fail")); break;
+        }
+        uint8_t empty_uid[4] = { 0 };
+        ToHex_P((unsigned char*)empty_uid, sizeof(empty_uid), Rc522[index].uids, sizeof(Rc522[index].uids));
+        AddLog(LOG_LEVEL_INFO, PSTR("MFR: RC522 Rfid Reader %d detected %s"), index, ver);
+        Rc522[index].present = true;
+  //    }
+  //    Mfrc522->PCD_Init();       // Re-init as SelfTest blows init
       }
-      uint8_t empty_uid[4] = { 0 };
-      ToHex_P((unsigned char*)empty_uid, sizeof(empty_uid), Rc522.uids, sizeof(Rc522.uids));
-      AddLog(LOG_LEVEL_INFO, PSTR("MFR: RC522 Rfid Reader detected %s"), ver);
-      Rc522.present = true;
-//    }
-//    Mfrc522->PCD_Init();       // Re-init as SelfTest blows init
+    }
   }
 }
 
 #ifdef USE_WEBSERVER
 void RC522Show(void) {
-  WSContentSend_PD(PSTR("{s}RC522 UID{m}%s{e}"), Rc522.uids);
+  for (uint32_t index = 0; index < MAX_RC522; index++) {
+    if (Rc522[index].present) {
+      WSContentSend_PD(PSTR("{s}RC522 %d UID{m}%s{e}"), index, Rc522[index].uids);
+    }
+  }
 }
 #endif  // USE_WEBSERVER
 
@@ -151,9 +159,11 @@ bool RC522Command(void) {
       uint8_t gain;
       if (strchr(XdrvMailbox.data, ',') != nullptr) {
         gain = strtol(ArgV(argument, 2), nullptr, 10) & 0x7;
-        Mfrc522->PCD_SetAntennaGain(gain << 4);
+        for (uint32_t index = 0; index < MAX_RC522; index++) {
+          if (Rc522[index].present) Mfrc522[index]->PCD_SetAntennaGain(gain << 4);
+        }
       }
-      gain = Mfrc522->PCD_GetAntennaGain() >> 4;  // 0..7
+      gain = Mfrc522[0]->PCD_GetAntennaGain() >> 4;  // 0..7
       Response_P(PSTR("{\"Sensor80\":{\"Gain\":%d}}"), gain);
       break;
   }
@@ -171,13 +181,17 @@ bool Xsns80(uint32_t function) {
   if (FUNC_INIT == function) {
     RC522Init();
   }
-  else if (Rc522.present) {
+  else {
     switch (function) {
       case FUNC_EVERY_250_MSECOND:
-        if (Rc522.scantimer) {
-          Rc522.scantimer--;
-        } else {
-          RC522ScanForTag();
+        for (uint32_t index = 0; index < MAX_RC522; index++) {
+          if (Rc522[index].present) {
+            if (Rc522[index].scantimer) {
+              Rc522[index].scantimer--;
+            } else {
+              RC522ScanForTag(index);
+            }
+          }
         }
         break;
       case FUNC_COMMAND_SENSOR:

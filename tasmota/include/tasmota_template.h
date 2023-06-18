@@ -592,7 +592,7 @@ const uint16_t kGpioNiceList[] PROGMEM = {
   AGPIO(GPIO_NRF24_DC),
 #endif
 #ifdef USE_RC522
-  AGPIO(GPIO_RC522_CS),                 // RC522 Rfid Chip Select
+  AGPIO(GPIO_RC522_CS) + MAX_RC522,                 // RC522 Rfid Chip Select
   AGPIO(GPIO_RC522_RST),                // RC522 Rfid Reset
 #endif
 #ifdef USE_SDCARD
